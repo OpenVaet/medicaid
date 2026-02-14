@@ -29,6 +29,9 @@ out_dir_no_desc   <- file.path("outputs", "no_desc")
 out_dir_with_desc <- file.path("outputs", "with_desc")
 out_dir           <- "outputs"
 
+covid_date        <- as.Date("2019-12-15")
+vaccine_date      <- as.Date("2020-12-14")
+
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 dir.create(out_dir_no_desc, showWarnings = FALSE, recursive = TRUE)
 dir.create(out_dir_with_desc, showWarnings = FALSE, recursive = TRUE)
@@ -89,39 +92,68 @@ safe_filename <- function(x) {
 }
 
 plot_code_monthly <- function(d, code, desc, out_path) {
-  # d must contain: ym, total_unique_beneficiaries, total_paid
   d <- d %>% arrange(ym)
-  
+
+  label_y <- max(d$total_unique_beneficiaries, na.rm = TRUE) * 0.98
+
   # Scale expenses onto the beneficiaries axis for dual-axis display
   max_b <- max(d$total_unique_beneficiaries, na.rm = TRUE)
   max_p <- max(d$total_paid, na.rm = TRUE)
   scale_factor <- ifelse(is.finite(max_p) && max_p > 0, max_b / max_p, 1)
-  
+
   title_txt <- ifelse(desc == "not_found",
                       paste0("HCPCS: ", code),
                       paste0("HCPCS: ", code, " — ", desc))
-  
+
   p <- ggplot(d, aes(x = ym)) +
-    geom_col(aes(y = total_unique_beneficiaries), alpha = 0.6) +
-    geom_line(aes(y = total_paid * scale_factor), linewidth = 0.8) +
-    scale_x_date(date_breaks = "6 months", date_labels = "%Y-%m", expand = expansion(mult = c(0.01, 0.02))) +
+    # Bars (recipients)
+    geom_col(aes(y = total_unique_beneficiaries, fill = "Recipients (bars)"),
+             alpha = 0.6) +
+
+    # Line (paid), scaled to left axis
+    geom_line(aes(y = total_paid * scale_factor, color = "Paid (line)"),
+              linewidth = 0.8) +
+
+    # Vertical markers
+    geom_vline(xintercept = covid_date, linetype = "dashed", linewidth = 0.6, color = "red") +
+    geom_vline(xintercept = vaccine_date, linetype = "dashed", linewidth = 0.6, color = "red") +
+    annotate("text", x = covid_date,   y = label_y, label = "COVID",
+             vjust = 0, angle = 90, size = 3, color = "red") +
+    annotate("text", x = vaccine_date, y = label_y, label = "Vaccine",
+             vjust = 0, angle = 90, size = 3, color = "red") +
+
+    scale_x_date(date_breaks = "6 months", date_labels = "%Y-%m",
+                 expand = expansion(mult = c(0.01, 0.02))) +
+
     scale_y_continuous(
       name = "Total recipients (unique beneficiaries per month)",
       labels = comma,
-      sec.axis = sec_axis(~ . / scale_factor, name = "Total paid", labels = dollar_format(accuracy = 1))
+      sec.axis = sec_axis(~ . / scale_factor, name = "Total paid",
+                          labels = dollar_format(accuracy = 1))
     ) +
-    labs(
-      title = title_txt,
-      x = "Year-Month"
+
+    # Legend labels (do not set specific colors; ggplot picks defaults)
+    scale_fill_discrete(name = NULL) +
+    scale_color_discrete(name = NULL) +
+
+    # Combine fill + color into a single legend box
+    guides(
+      fill = guide_legend(order = 1, override.aes = list(linetype = 0)),
+      color = guide_legend(order = 1)
     ) +
+
+    labs(title = title_txt, x = "Year-Month") +
     theme_minimal(base_size = 11) +
     theme(
       axis.text.x = element_text(angle = 45, hjust = 1),
-      plot.title = element_text(face = "bold")
+      plot.title = element_text(face = "bold"),
+      legend.position = "top",
+      legend.justification = "left"
     )
-  
+
   ggsave(out_path, plot = p, width = 12, height = 6, dpi = 150)
 }
+
 
 # Monthly totals for plotting (already monthly, but ensure grouped properly)
 monthly_by_code <- df %>%
@@ -181,7 +213,6 @@ for (i in seq_len(nrow(top150_with_desc))) {
 #    - Numbers at end of lines
 #    - Right-side legend panel with "n. code — description"
 # ----------------------------
-
 suppressPackageStartupMessages({
   # We'll try patchwork first, then fall back to cowplot/gridExtra
   has_patchwork <- requireNamespace("patchwork", quietly = TRUE)
@@ -214,8 +245,17 @@ last_pts <- summary_data %>%
   ungroup()
 
 # Main plot: lines + numeric labels (NO legend)
+
+label_y_paid <- max(summary_data$total_paid, na.rm = TRUE) * 0.98
+
 p_main <- ggplot(summary_data, aes(x = ym, y = total_paid, group = label, color = label)) +
   geom_line(linewidth = 0.7, alpha = 0.9) +
+  geom_vline(xintercept = covid_date, linetype = "dashed", linewidth = 0.6, color = "red") +
+  geom_vline(xintercept = vaccine_date, linetype = "dashed", linewidth = 0.6, color = "red") +
+  annotate("text", x = covid_date,   y = label_y_paid, label = "COVID",
+         vjust = 0, angle = 90, size = 3, color = "red") +
+  annotate("text", x = vaccine_date, y = label_y_paid, label = "Vaccine",
+           vjust = 0, angle = 90, size = 3, color = "red") +
   geom_text_repel(
     data = last_pts,
     aes(label = rank),
@@ -243,8 +283,10 @@ p_main <- ggplot(summary_data, aes(x = ym, y = total_paid, group = label, color 
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
     plot.title = element_text(face = "bold"),
-    legend.position = "none"
+    legend.position = "none",
+    plot.margin = margin(10, 10, 20, 10)
   )
+
 
 # Legend panel as a simple text plot on the right
 legend_df <- summary_data %>%
@@ -319,9 +361,17 @@ last_pts_b <- summary_benes %>%
   slice_tail(n = 1) %>%
   ungroup()
 
+label_y_benes <- max(summary_benes$total_unique_beneficiaries, na.rm = TRUE) * 0.98
+
 p_main_b <- ggplot(summary_benes,
                    aes(x = ym, y = total_unique_beneficiaries, group = label, color = label)) +
   geom_line(linewidth = 0.7, alpha = 0.9) +
+  geom_vline(xintercept = covid_date, linetype = "dashed", linewidth = 0.6, color = "red") +
+  geom_vline(xintercept = vaccine_date, linetype = "dashed", linewidth = 0.6, color = "red") +
+  annotate("text", x = covid_date,   y = label_y_benes, label = "COVID",
+         vjust = 0, angle = 90, size = 3, color = "red") +
+  annotate("text", x = vaccine_date, y = label_y_benes, label = "Vaccine",
+           vjust = 0, angle = 90, size = 3, color = "red") +
   geom_text_repel(
     data = last_pts_b,
     aes(label = rank),
@@ -350,8 +400,10 @@ p_main_b <- ggplot(summary_benes,
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
     plot.title = element_text(face = "bold"),
-    legend.position = "none"
+    legend.position = "none",
+    plot.margin = margin(10, 10, 20, 10)
   )
+
 
 legend_df_b <- summary_benes %>%
   distinct(rank, hcpcs_code, hcpcs_desc_short, label) %>%
